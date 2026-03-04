@@ -48,7 +48,6 @@ setvars
 flask init-db
 ```
 
-> [!info]
 > `setvars` est un petit script qui set les variables d'environnments `FLASK_DEBUG` et `FLASK_APP` pour windows, c'est plus simple.
 
 ### Démarrage du serveur
