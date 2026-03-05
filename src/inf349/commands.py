@@ -10,7 +10,7 @@ def init_db():
     db.create_tables([Product, Order, ShippingInformation, CreditCard, Transaction])
 
     # Récupération des produits
-    url = "http://dimensweb.uqac.ca/~jgnault/shops/products/"
+    url = "https://dimensweb.uqac.ca/~jgnault/shops/products/"
     
     try:
         # Requête HTTP

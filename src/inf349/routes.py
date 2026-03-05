@@ -110,7 +110,7 @@ def get_order(order_id):
     Récupère les détails d'une commande spécifique.
     """
 
-    # Récupérer la commande ou retourner 404
+    # Récupérer la commande
     order = Order.get_or_none(Order.id == order_id)
     if not order:
         return jsonify({"error": "Commande non trouvée"}), 404
@@ -134,12 +134,12 @@ def get_order(order_id):
 
     total_price_tax = order.total_price_tax if order.total_price_tax else total_price
 
-    # Récupération des relations si elles existent (seront utiles pour le PUT)
+    # Récupération des relations (si elles existent, sinon null)
     shipping_info = order.shipping_information.first()
     credit_card = order.credit_card.first()
     transaction = order.transaction.first()
 
-    # Formatage des sous-objets pour éviter les erreurs s'ils n'existent pas encore
+    # S'il existe ont ajoute les différentes infos
     shipping_dict = {}
     if shipping_info:
         shipping_dict = {
@@ -243,7 +243,7 @@ def handle_payment(order, cc_data, order_id):
         
     amount_charged = int(order.total_price + order.shipping_price)
     
-    pay_url = "http://dimensweb.uqac.ca/~jgnault/shops/pay/"
+    pay_url = "https://dimensweb.uqac.ca/~jgnault/shops/pay/"
     payload = {"credit_card": cc_data, "amount_charged": amount_charged}
     
     req = urllib.request.Request(
