@@ -21,7 +21,7 @@ class Order(BaseModel):
     email = CharField(null=True)
     
     # Champs calculés
-    # TODO: les calculées dynamiquement ???
+    # TODO: les calculer dynamiquement ???
     shipping_price = IntegerField(null=True) # Prix d'expédition calculé selon le poids
     total_price = FloatField(null=True) # Prix produit * quantité
     total_price_tax = FloatField(null=True) # total_price * taxe de la province

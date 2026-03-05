@@ -193,7 +193,7 @@ def get_order(order_id):
 def update_order(order_id):
     """
     PUT /order/<order_id>
-    Met à jour les infos de livraison OU procède au paiement de la commande.
+    Redirige vers la mise à jour des infos OU le paiement.
     """
     order = Order.get_or_none(Order.id == order_id)
     if not order:
@@ -203,187 +203,137 @@ def update_order(order_id):
     if not data:
         return jsonify({"errors": {"order": {"code": "missing-fields", "name": "Payload manquant"}}}), 422
         
-    # --- BRANCHE 1 : PAIEMENT DE LA COMMANDE ---
+    # Logique de paiement
     if "credit_card" in data:
-        # Vérification qu'on ne mixe pas paiement et informations de livraison
         if "order" in data:
             return jsonify({"errors": {"order": {"code": "invalid-request", "name": "Le paiement et la mise à jour des informations doivent être faits séparément."}}}), 422
-            
-        # Vérification si la commande a les informations de livraison
-        if not order.email or order.shipping_information.count() == 0:
-            return jsonify({
-                "errors": {
-                    "order": {
-                        "code": "missing-fields",
-                        "name": "Les informations du client sont nécessaire avant d'appliquer une carte de crédit"
-                    }
-                }
-            }), 422
-            
-        # Vérification si la commande est déjà payée
-        if order.paid:
-            return jsonify({
-                "errors": {
-                    "order": {
-                        "code": "already-paid",
-                        "name": "La commande a déjà été payée."
-                    }
-                }
-            }), 422
-            
-        cc_data = data["credit_card"]
+        return handle_payment(order, data["credit_card"], order_id)
         
-        # Validation du CVV
-        cvv = cc_data.get("cvv")
-        if not isinstance(cvv, str) or len(cvv) != 3 or not cvv.isdigit():
-            return jsonify({"errors": {"credit_card": {"code": "invalid-cvv", "name": "Le CVV doit être une chaîne de 3 chiffres"}}}), 422
-            
-        # Validation de l'expiration
-        exp_year = cc_data.get("expiration_year")
-        exp_month = cc_data.get("expiration_month")
-        
-        if not isinstance(exp_year, int) or not isinstance(exp_month, int):
-            return jsonify({"errors": {"credit_card": {"code": "invalid-expiration", "name": "Les dates d'expiration doivent être des entiers"}}}), 422
-            
-        now = datetime.now()
-        if exp_year < now.year or (exp_year == now.year and exp_month < now.month):
-            return jsonify({
-                "errors": {
-                    "credit_card": {
-                        "code": "card-expired",
-                        "name": "La carte de crédit est expirée."
-                    }
-                }
-            }), 422
-            
-        # Calcul du montant total à charger
-        amount_charged = int(order.total_price + order.shipping_price)
-        
-        # Appel à l'API distante de paiement
-        pay_url = "http://dimensweb.uqac.ca/~jgnault/shops/pay/"
-        payload = {
-            "credit_card": cc_data,
-            "amount_charged": amount_charged
-        }
-        
-        req = urllib.request.Request(
-            pay_url,
-            data=json.dumps(payload).encode('utf-8'),
-            headers={
-                'Content-Type': 'application/json',
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'
-            },
-            method='POST'
-        )
-        
-        try:
-            with urllib.request.urlopen(req) as response:
-                result = json.loads(response.read().decode('utf-8'))
-                
-                # Succès du paiement : Sauvegarde des données
-                CreditCard.create(
-                    order=order,
-                    name=result["credit_card"]["name"],
-                    first_digits=result["credit_card"]["first_digits"],
-                    last_digits=result["credit_card"]["last_digits"],
-                    expiration_year=result["credit_card"]["expiration_year"],
-                    expiration_month=result["credit_card"]["expiration_month"]
-                )
-                
-                Transaction.create(
-                    order=order,
-                    transaction_id=result["transaction"]["id"],
-                    success=result["transaction"]["success"],
-                    amount_charged=result["transaction"]["amount_charged"]
-                )
-                
-                order.paid = True
-                order.save()
-                
-                return get_order(order_id)
-                
-        except urllib.error.HTTPError as e:
-            # En cas d'erreur de l'API distante (ex: carte déclinée)
-            if e.code == 422:
-                error_data = json.loads(e.read().decode('utf-8'))
-                return jsonify(error_data), 422
-            else:
-                return jsonify({"error": "Erreur inattendue du service de paiement"}), e.code
-
-    # --- BRANCHE 2 : INFORMATIONS DE LIVRAISON ---
+    # Logique de mise à jour des informations de livraison
     elif "order" in data:
-        order_data = data["order"]
-        email = order_data.get("email")
-        shipping_info_data = order_data.get("shipping_information")
+        return handle_shipping_update(order, data["order"], order_id)
         
-        # Validation de l'email et de l'objet shipping_information
-        if not email or not shipping_info_data:
-            return jsonify({
-                "errors": {
-                    "order": {
-                        "code": "missing-fields",
-                        "name": "Il manque un ou plusieurs champs qui sont obligatoires"
-                    }
-                }
-            }), 422
-            
-        # Validation des sous-champs de shipping_information
-        required_fields = ["country", "address", "postal_code", "city", "province"]
-        for field in required_fields:
-            if field not in shipping_info_data or not shipping_info_data.get(field):
-                return jsonify({
-                    "errors": {
-                        "order": {
-                            "code": "missing-fields",
-                            "name": "Il manque un ou plusieurs champs qui sont obligatoires"
-                        }
-                    }
-                }), 422
-
-        # Calculs des taxes et frais
-        taxes = {
-            "QC": 0.15,
-            "ON": 0.13,
-            "AB": 0.05,
-            "BC": 0.12,
-            "NS": 0.14
-        }
-        
-        province = shipping_info_data["province"]
-        tax_rate = taxes.get(province, 0.0) 
-        
-        order.email = email
-        order.total_price_tax = order.total_price * (1 + tax_rate)
-        
-        total_weight = order.product.weight * order.quantity
-        if total_weight <= 500:
-            order.shipping_price = 500
-        elif total_weight < 2000:
-            order.shipping_price = 1000
-        else:
-            order.shipping_price = 2500
-            
-        order.save()
-        
-        shipping_info = order.shipping_information.first()
-        if not shipping_info:
-            ShippingInformation.create(
-                order=order,
-                country=shipping_info_data["country"],
-                address=shipping_info_data["address"],
-                postal_code=shipping_info_data["postal_code"],
-                city=shipping_info_data["city"],
-                province=shipping_info_data["province"]
-            )
-        else:
-            shipping_info.country = shipping_info_data["country"]
-            shipping_info.address = shipping_info_data["address"]
-            shipping_info.postal_code = shipping_info_data["postal_code"]
-            shipping_info.city = shipping_info_data["city"]
-            shipping_info.province = shipping_info_data["province"]
-            shipping_info.save()
-            
-        return get_order(order_id)
-        
-    # Si on ne reçoit ni credit_card ni order
+    # Cas invalide
     return jsonify({"errors": {"order": {"code": "invalid-request", "name": "Requête invalide"}}}), 400
+
+def handle_payment(order, cc_data, order_id):
+    """
+    Gère la logique de paiement d'une commande.
+    Parent: update_order
+    """
+    if not order.email or order.shipping_information.count() == 0:
+        return jsonify({"errors": {"order": {"code": "missing-fields", "name": "Les informations du client sont nécessaire avant d'appliquer une carte de crédit"}}}), 422
+        
+    if order.paid:
+        return jsonify({"errors": {"order": {"code": "already-paid", "name": "La commande a déjà été payée."}}}), 422
+        
+    cvv = cc_data.get("cvv")
+    if not isinstance(cvv, str) or len(cvv) != 3 or not cvv.isdigit():
+        return jsonify({"errors": {"credit_card": {"code": "invalid-cvv", "name": "Le CVV doit être une chaîne de 3 chiffres"}}}), 422
+        
+    exp_year = cc_data.get("expiration_year")
+    exp_month = cc_data.get("expiration_month")
+    
+    if not isinstance(exp_year, int) or not isinstance(exp_month, int):
+        return jsonify({"errors": {"credit_card": {"code": "invalid-expiration", "name": "Les dates d'expiration doivent être des entiers"}}}), 422
+        
+    now = datetime.now()
+    if exp_year < now.year or (exp_year == now.year and exp_month < now.month):
+        return jsonify({"errors": {"credit_card": {"code": "card-expired", "name": "La carte de crédit est expirée."}}}), 422
+        
+    amount_charged = int(order.total_price + order.shipping_price)
+    
+    pay_url = "http://dimensweb.uqac.ca/~jgnault/shops/pay/"
+    payload = {"credit_card": cc_data, "amount_charged": amount_charged}
+    
+    req = urllib.request.Request(
+        pay_url,
+        data=json.dumps(payload).encode('utf-8'),
+        headers={
+            'Content-Type': 'application/json',
+            'User-Agent': 'Mozilla/5.0'
+        },
+        method='POST'
+    )
+    
+    try:
+        with urllib.request.urlopen(req) as response:
+            result = json.loads(response.read().decode('utf-8'))
+            
+            CreditCard.create(
+                order=order,
+                name=result["credit_card"]["name"],
+                first_digits=result["credit_card"]["first_digits"],
+                last_digits=result["credit_card"]["last_digits"],
+                expiration_year=result["credit_card"]["expiration_year"],
+                expiration_month=result["credit_card"]["expiration_month"]
+            )
+            
+            Transaction.create(
+                order=order,
+                transaction_id=result["transaction"]["id"],
+                success=result["transaction"]["success"],
+                amount_charged=result["transaction"]["amount_charged"]
+            )
+            
+            order.paid = True
+            order.save()
+            
+            return get_order(order_id)
+            
+    except urllib.error.HTTPError as e:
+        if e.code == 422:
+            return jsonify(json.loads(e.read().decode('utf-8'))), 422
+        return jsonify({"error": "Erreur inattendue du service de paiement"}), e.code
+
+def handle_shipping_update(order, order_data, order_id):
+    """
+    Gère la mise à jour des informations de livraison.
+    Parent: update_order
+    """
+    email = order_data.get("email")
+    shipping_info_data = order_data.get("shipping_information")
+    
+    if not email or not shipping_info_data:
+        return jsonify({"errors": {"order": {"code": "missing-fields", "name": "Il manque un ou plusieurs champs qui sont obligatoires"}}}), 422
+        
+    required_fields = ["country", "address", "postal_code", "city", "province"]
+    for field in required_fields:
+        if field not in shipping_info_data or not shipping_info_data.get(field):
+            return jsonify({"errors": {"order": {"code": "missing-fields", "name": "Il manque un ou plusieurs champs qui sont obligatoires"}}}), 422
+
+    taxes = {"QC": 0.15, "ON": 0.13, "AB": 0.05, "BC": 0.12, "NS": 0.14}
+    tax_rate = taxes.get(shipping_info_data["province"], 0.0) 
+    
+    order.email = email
+    order.total_price_tax = order.total_price * (1 + tax_rate)
+    
+    total_weight = order.product.weight * order.quantity
+    if total_weight <= 500:
+        order.shipping_price = 500
+    elif total_weight < 2000:
+        order.shipping_price = 1000
+    else:
+        order.shipping_price = 2500
+        
+    order.save()
+    
+    shipping_info = order.shipping_information.first()
+    if not shipping_info:
+        ShippingInformation.create(
+            order=order,
+            country=shipping_info_data["country"],
+            address=shipping_info_data["address"],
+            postal_code=shipping_info_data["postal_code"],
+            city=shipping_info_data["city"],
+            province=shipping_info_data["province"]
+        )
+    else:
+        shipping_info.country = shipping_info_data["country"]
+        shipping_info.address = shipping_info_data["address"]
+        shipping_info.postal_code = shipping_info_data["postal_code"]
+        shipping_info.city = shipping_info_data["city"]
+        shipping_info.province = shipping_info_data["province"]
+        shipping_info.save()
+        
+    return get_order(order_id)
