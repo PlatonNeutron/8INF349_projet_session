@@ -1,6 +1,21 @@
+import os
 from peewee import *
 
-db = SqliteDatabase('data.db')
+# On récupère les informations de connexion à la db
+DB_HOST = os.environ.get('DB_HOST')
+DB_USER = os.environ.get('DB_USER')
+DB_PASSWORD = os.environ.get('DB_PASSWORD')
+DB_PORT = int(os.environ.get('DB_PORT'))
+DB_NAME = os.environ.get('DB_NAME')
+
+# Création de l'objet db
+db = PostgresqlDatabase(
+    DB_NAME,
+    user=DB_USER,
+    password=DB_PASSWORD,
+    host=DB_HOST,
+    port=DB_PORT
+)
 
 class BaseModel(Model):
     class Meta:

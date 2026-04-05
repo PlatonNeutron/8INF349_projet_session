@@ -15,7 +15,9 @@ def init_db():
     try:
         # Requête HTTP
         with urllib.request.urlopen(url) as response:
-            content = response.read().decode()
+            content = response.read().decode('utf-8')
+            
+            content = content.replace('\\u0000', '') # Nettoyage sinon postgre veut pas
             data = json.loads(content)
 
         # Insertion des données
